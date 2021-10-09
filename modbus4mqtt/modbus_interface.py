@@ -15,7 +15,7 @@ DEFAULT_READ_SLEEP_S = 0.05
 
 class modbus_interface():
 
-    def __init__(self, ip, port=502, update_rate_s=DEFAULT_SCAN_RATE_S, variant=None, scan_batching=None, device_id=0x01):
+    def __init__(self, ip, port=502, update_rate_s=DEFAULT_SCAN_RATE_S, variant=None, scan_batching=None, device_id=1):
         self._ip = ip
         self._port = port
         # This is a dict of sets. Each key represents one table of modbus registers.
@@ -108,7 +108,7 @@ class modbus_interface():
             while not self._planned_writes.empty() and (time() - write_start_time) < max_block_s:
                 addr, value, mask = self._planned_writes.get()
                 if mask == 0xFFFF:
-                    self._mb.write_register(addr, value, unit=self.device_id)
+                    self._mb.write_register(addr, value, unit=self._device_id)
                 else:
                     # https://pymodbus.readthedocs.io/en/latest/source/library/pymodbus.client.html?highlight=mask_write_register#pymodbus.client.common.ModbusClientMixin.mask_write_register
                     # https://www.mathworks.com/help/instrument/modify-the-contents-of-a-holding-register-using-a-mask-write.html
@@ -124,7 +124,7 @@ class modbus_interface():
                     and_mask = (1<<16)-1-mask
                     or_mask = value
                     new_value = (old_value & and_mask) | (or_mask & (mask))
-                    self._mb.write_register(addr, new_value, unit=0x01)
+                    self._mb.write_register(addr, new_value, unit=self._device_id)
                 sleep(DEFAULT_WRITE_SLEEP_S)
         except Exception as e:
             # BUG catch only the specific exception that means pymodbus failed to write to a register
