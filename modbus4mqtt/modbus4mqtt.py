@@ -33,20 +33,30 @@ class mqtt_interface():
         self.registers = self.config['registers']
         for register in self.registers:
             register['address'] += self.address_offset
-        self.modbus_connect_retries = -1  # Retry forever by default
-        self.modbus_reconnect_sleep_interval = 5  # Wait this many seconds between modbus connection attempts
+        self.modbus_connect_retries = -1 # Retry forever by default
+        self.modbus_reconnect_sleep_interval = 5 # Wait this many seconds between modbus connection attempts
 
     def connect(self):
         # Connects to modbus and MQTT.
         self.connect_modbus()
         self.connect_mqtt()
 
+    def type_length(self, type):
+        if type in ['int16', 'uint16']:
+            return 1
+        elif type in ['int32', 'uint32']:
+            return 2
+        elif type in ['int64', 'uint64']:
+            return 4
+        raise ValueError ("Unsupported type {}".format(type))
+
     def connect_modbus(self):
         self._mb = modbus_interface.modbus_interface(self.config['ip'],
                                                      self.config.get('port', 502),
                                                      self.config.get('update_rate', 5),
                                                      variant=self.config.get('variant', None),
-                                                     scan_batching=self.config.get('scan_batching', None))
+                                                     scan_batching=self.config.get('scan_batching', None),
+                                                     device_id=self.config.get('device_id', 1))
         failed_attempts = 1
         while self._mb.connect():
             logging.warning("Modbus connection attempt {} failed. Retrying...".format(failed_attempts))
@@ -59,7 +69,8 @@ class mqtt_interface():
             sleep(self.modbus_reconnect_sleep_interval)
         # Tells the modbus interface about the registers we consider interesting.
         for register in self.registers:
-            self._mb.add_monitor_register(register.get('table', 'holding'), register['address'])
+            for i in range(self.type_length(register.get('type', 'uint16'))):
+                self._mb.add_monitor_register(register.get('table', 'holding'), register['address']+i)
             register['value'] = None
 
     def modbus_connection_failed(self):
@@ -96,16 +107,26 @@ class mqtt_interface():
 
         for register in self._get_registers_with('pub_topic'):
             try:
-                value = self._mb.get_value(register.get('table', 'holding'), register['address'])
+                value = bytes(0)
+                temp = bytes(0)
+                for i in range(self.type_length(register.get('type', 'uint16'))):
+                    data = self._mb.get_value(register.get('table', 'holding'), register['address'] + i)
+                    value = value + data.to_bytes(2,'big')
             except Exception:
-                logging.warning("Couldn't get value from register {} in table {}".format(register['address'],
-                                register.get('table', 'holding')))
+                logging.warning("Couldn't get value from register {} in table {}".format(register['address'], register.get('table', 'holding')))
                 continue
-            # Filter the value through the mask, if present.
-            value &= register.get('mask', 0xFFFF)
+
+
             # Tweak the value according to the type.
             type = register.get('type', 'uint16')
-            value = modbus_interface._convert_from_uint16_to_type(value, type)
+            value = modbus_interface._convert_from_bytes_to_type(value, type)
+
+            # Filter the value through the mask, if present.
+            if not register.get('mask') is None:
+                # masks only make sense for uint
+                if register.get('type', 'uint16') in ['uint16', 'uint32', 'uint64']:
+                    value &= register.get('mask')
+
             # Scale the value, if required.
             value *= register.get('scale', 1)
             # Clamp the number of decimal points
@@ -200,7 +221,7 @@ class mqtt_interface():
         duplicate_json_keys = {}
         # Key: shared pub_topics, value: set of retain values (true/false)
         retain_setting = {}
-        valid_types = ['uint16', 'int16']
+        valid_types = ['uint16', 'int16', 'uint32', 'int32', 'uint64', 'int64']
 
         # Look for duplicate pub_topics
         for register in registers:
@@ -288,3 +309,4 @@ def main(hostname, port, username, password, config, mqtt_topic_prefix, use_tls,
 
 if __name__ == '__main__':
     main()
+

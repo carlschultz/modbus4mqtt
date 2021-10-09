@@ -15,7 +15,7 @@ DEFAULT_READ_SLEEP_S = 0.05
 
 class modbus_interface():
 
-    def __init__(self, ip, port=502, update_rate_s=DEFAULT_SCAN_RATE_S, variant=None, scan_batching=None):
+    def __init__(self, ip, port=502, update_rate_s=DEFAULT_SCAN_RATE_S, variant=None, scan_batching=None, device_id=0x01):
         self._ip = ip
         self._port = port
         # This is a dict of sets. Each key represents one table of modbus registers.
@@ -29,6 +29,7 @@ class modbus_interface():
         self._writing = False
         self._variant = variant
         self._scan_batching = DEFAULT_SCAN_BATCHING
+        self._device_id = device_id
         if scan_batching is not None:
             if scan_batching < MIN_SCAN_BATCHING:
                 logging.warning("Bad value for scan_batching: {}. Enforcing minimum value of {}".format(scan_batching, MIN_SCAN_BATCHING))
@@ -107,7 +108,7 @@ class modbus_interface():
             while not self._planned_writes.empty() and (time() - write_start_time) < max_block_s:
                 addr, value, mask = self._planned_writes.get()
                 if mask == 0xFFFF:
-                    self._mb.write_register(addr, value, unit=0x01)
+                    self._mb.write_register(addr, value, unit=self.device_id)
                 else:
                     # https://pymodbus.readthedocs.io/en/latest/source/library/pymodbus.client.html?highlight=mask_write_register#pymodbus.client.common.ModbusClientMixin.mask_write_register
                     # https://www.mathworks.com/help/instrument/modify-the-contents-of-a-holding-register-using-a-mask-write.html
@@ -135,14 +136,22 @@ class modbus_interface():
     def _scan_value_range(self, table, start, count):
         result = None
         if table == 'input':
-            result = self._mb.read_input_registers(start, count, unit=0x01)
+            result = self._mb.read_input_registers(start, count, unit=self._device_id)
         elif table == 'holding':
-            result = self._mb.read_holding_registers(start, count, unit=0x01)
+            result = self._mb.read_holding_registers(start, count, unit=self._device_id)
         try:
             return result.registers
         except:
             # The result doesn't have a registers attribute, something has gone wrong!
             raise ValueError("Failed to read {} {} table registers starting from {}: {}".format(count, table, start, result))
+
+def _convert_from_bytes_to_type(value, type):
+    type = type.strip().lower()
+    if type in ['uint16', 'uint32', 'uint64']:
+        return int.from_bytes(value,byteorder='big',signed=False)
+    elif type in ['int16', 'int32', 'int64']:
+        return int.from_bytes(value,byteorder='big',signed=True)
+    raise ValueError("Unrecognised type conversion attempted: bytes to {}".format(type))
 
 def _convert_from_uint16_to_type(value, type):
     type = type.strip().lower()
